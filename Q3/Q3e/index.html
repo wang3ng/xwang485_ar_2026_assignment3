@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -12,14 +12,158 @@
 <body>
     <canvas id="renderCanvas"></canvas>
     <script>
-        const canvas = document.getElementById("renderCanvas");
-        const engine = new BABYLON.Engine(canvas, true);
-        globalThis.canvas = canvas;
-        globalThis.engine = engine;
-        import("./scene.js").then(function (mod) {
-            return mod.createScene();
-        }).then(function (scene) {
+// Q3.e. Build the OpenGL projection from intrinsics, then map a
+// camera-space point to a pixel. v grows with NDC y.
+
+function projectionMatrix(W, H, n, f, fx, fy, ox, oy) {
+    const span = f - n;
+    return [
+        [2 * fx / W, 0, 1 - 2 * ox / W, 0],
+        [0, 2 * fy / H, 1 - 2 * oy / H, 0],
+        [0, 0, -(f + n) / span, -(2 * f * n) / span],
+        [0, 0, -1, 0]
+    ];
+}
+
+function multiplyMatrixPoint(M, p) {
+    return [
+        M[0][0] * p[0] + M[0][1] * p[1] + M[0][2] * p[2] + M[0][3] * p[3],
+        M[1][0] * p[0] + M[1][1] * p[1] + M[1][2] * p[2] + M[1][3] * p[3],
+        M[2][0] * p[0] + M[2][1] * p[1] + M[2][2] * p[2] + M[2][3] * p[3],
+        M[3][0] * p[0] + M[3][1] * p[1] + M[3][2] * p[2] + M[3][3] * p[3]
+    ];
+}
+
+// clip = M P, NDC = clip / w, then the Q3.d pixel map.
+function projectToPixel(Pc, camera) {
+    const M = projectionMatrix(
+        camera.W, camera.H, camera.n, camera.f,
+        camera.fx, camera.fy, camera.ox, camera.oy
+    );
+    const clip = multiplyMatrixPoint(M, Pc);
+    const ndc = [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]];
+    return {
+        matrix: M,
+        clip: clip,
+        ndc: ndc,
+        u: 0.5 * (ndc[0] + 1) * camera.W,
+        v: 0.5 * (ndc[1] + 1) * camera.H
+    };
+}
+
+var createScene = async function () {
+
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.12, 0.12, 0.14, 1);
+
+    const camera = new BABYLON.FreeCamera(
+        "camera",
+        new BABYLON.Vector3(0, 0, 8),
+        scene
+    );
+
+    camera.setTarget(
+        new BABYLON.Vector3(0, 0, 0)
+    );
+
+    camera.attachControl(canvas, true);
+
+    function framePlane() {
+        const aspect = engine.getAspectRatio(camera);
+        const tanHalf = Math.tan(camera.fov * 0.5);
+        const distH = 3 / tanHalf;
+        const distW = 4 / (tanHalf * aspect);
+        camera.position.z = Math.max(distH, distW) * 1.08;
+    }
+
+    framePlane();
+    engine.onResizeObservable.add(framePlane);
+
+    const light = new BABYLON.HemisphericLight(
+        "light",
+        new BABYLON.Vector3(0, 1, 0),
+        scene
+    );
+
+
+    const intrinsics = {
+        W: 800, H: 600, n: 0.2, f: 20,
+        fx: 800, fy: 800, ox: 400, oy: 400
+    };
+    const Pc = [0.3, -0.15, -6, 1];
+    const result = projectToPixel(Pc, intrinsics);
+    globalThis.Q3 = result;
+    console.log("Q3 pixel", result.u, result.v, result);
+
+    const tex = new BABYLON.DynamicTexture("proj", { width: 800, height: 600 }, scene, false);
+    const ctx = tex.getContext();
+    ctx.translate(800, 0);
+    ctx.scale(-1, 1);
+    ctx.fillStyle = "#1e1e24";
+    ctx.fillRect(0, 0, 800, 600);
+
+    ctx.strokeStyle = "#3a3a44";
+    ctx.lineWidth = 1;
+    for (let u = 0; u <= 800; u += 40) {
+        ctx.beginPath();
+        ctx.moveTo(u, 0);
+        ctx.lineTo(u, 600);
+        ctx.stroke();
+    }
+    for (let v = 0; v <= 600; v += 40) {
+        const y = 600 - v;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(800, y);
+        ctx.stroke();
+    }
+
+    function mark(u, v, color, radius) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(u, 600 - v, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    mark(intrinsics.ox, intrinsics.oy, "#888888", 5);
+    mark(result.u, result.v, "#3ce0ff", 8);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "28px sans-serif";
+    ctx.fillText(
+        "pixel (" + result.u.toFixed(2) + ", " + result.v.toFixed(2) + ")",
+        24,
+        48
+    );
+    ctx.font = "20px sans-serif";
+    ctx.fillStyle = "#c8c8d0";
+    const clip = result.clip.map(function (value) { return value.toFixed(5); }).join(", ");
+    const ndc = result.ndc.map(function (value) { return value.toFixed(5); }).join(", ");
+    ctx.fillText("clip (" + clip + ")", 24, 84);
+    ctx.fillText("ndc (" + ndc + ")", 24, 112);
+    ctx.fillText("principal point (400, 400)    projected point", 24, 148);
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane("image", {
+        width: 8,
+        height: 6,
+        sideOrientation: BABYLON.Mesh.DOUBLESIDE
+    }, scene);
+    const mat = new BABYLON.StandardMaterial("imageMat", scene);
+    mat.diffuseTexture = tex;
+    mat.emissiveTexture = tex;
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    plane.material = mat;
+
+    return scene;
+};
+
+        var canvas = document.getElementById("renderCanvas");
+        var engine = new BABYLON.Engine(canvas, true);
+        createScene().then(function (scene) {
             engine.runRenderLoop(function () { scene.render(); });
+        }).catch(function (err) {
+            console.error(err);
         });
         window.addEventListener("resize", function () { engine.resize(); });
     </script>
