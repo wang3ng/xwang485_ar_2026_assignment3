@@ -8,11 +8,11 @@
         #renderCanvas { width: 100%; height: 100%; touch-action: none; }
     </style>
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
-    <script src="4c.js"></script>
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
-    <script>
+    <script type="module">
+        import { createScene } from "./4c.js";
         const canvas = document.getElementById("renderCanvas");
         const engine = new BABYLON.Engine(canvas, true);
         globalThis.canvas = canvas;

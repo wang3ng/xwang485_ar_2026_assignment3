@@ -1,4 +1,4 @@
-var createScene = function () {
+export const createScene = function () {
     // Base scene (as given)
     var scene = new BABYLON.Scene(engine);
 
