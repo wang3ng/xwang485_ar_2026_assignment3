@@ -156,7 +156,7 @@ export const createScene = function () {
     // Point Light. Starter color (0.7, 0.8, 1) is too dim under 1/d^2.
     shaderMat.setColor3("uPointLightColor", new BABYLON.Color3(8.0, 9.0, 11.0));
     shaderMat.setVector3("uPointLightPos", new BABYLON.Vector3(2.5, 4, -2.0));
-    shaderMat.setColor3("uPointLightColor2", new BABYLON.Color3(1.0, 0.4, 0.2));
+    shaderMat.setColor3("uPointLightColor2", new BABYLON.Color3(6.0, 14.0, 22.0));
     shaderMat.setVector3("uPointLightPos2", new BABYLON.Vector3(-2.5, 3, 2));
 
     // Update camera position every frame
