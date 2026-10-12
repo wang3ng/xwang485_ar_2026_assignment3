@@ -1,0 +1,362 @@
+// Q2 WebXR. Right controller ray hit-tests the room.
+// Trigger spawns fish.glb. Right stick moves, left stick yaws,
+// A / B scale, X resets. Only the newest fish is changed.
+
+const MOVE_SPEED = 0.5;
+const ROT_SPEED = 1.4;
+const DEADZONE = 0.18;
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 4;
+const SCALE_UP = 1.25;
+const SCALE_DOWN = 0.8;
+
+function modelUrl() {
+    if (globalThis.MODEL_URL) return globalThis.MODEL_URL;
+    return "Q2a/fish.glb";
+}
+
+function setStatus(text) {
+    const el = document.getElementById("status");
+    if (el) el.textContent = text;
+    console.log(text);
+}
+
+function setTreeEnabled(node, enabled) {
+    if (node.setEnabled) node.setEnabled(enabled);
+    for (const child of node.getChildren()) setTreeEnabled(child, enabled);
+}
+
+function stickAxis(component) {
+    if (!component || !component.axes) return { x: 0, y: 0 };
+    return {
+        x: Math.abs(component.axes.x) > DEADZONE ? component.axes.x : 0,
+        y: Math.abs(component.axes.y) > DEADZONE ? component.axes.y : 0
+    };
+}
+
+export const createScene = async function () {
+
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.12, 0.12, 0.14, 1);
+
+    // Desktop camera
+    const camera = new BABYLON.FreeCamera(
+        "camera",
+        new BABYLON.Vector3(0, 0.4, -1.2),
+        scene
+    );
+
+    camera.setTarget(
+        new BABYLON.Vector3(0, 0.12, 0)
+    );
+
+    camera.attachControl(canvas, true);
+    camera.minZ = 0.01;
+
+    // Light
+    const light = new BABYLON.HemisphericLight(
+        "light",
+        new BABYLON.Vector3(0, 1, 0),
+        scene
+    );
+
+
+    // Loaded model, fitted to about 25 cm and sitting on y = 0
+    const loaded = await BABYLON.SceneLoader.ImportMeshAsync("", modelUrl(), "", scene);
+    const template = new BABYLON.TransformNode("fishTemplate", scene);
+    loaded.meshes[0].setParent(template);
+    loaded.meshes[0].position.set(0, 0, 0);
+    template.computeWorldMatrix(true);
+    const bounds = template.getHierarchyBoundingVectors(true);
+    const size = bounds.max.subtract(bounds.min);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const fit = 0.25 / maxDim;
+    template.scaling.setAll(fit);
+    template.position.y = -bounds.min.y * fit;
+    template.computeWorldMatrix(true);
+    const fitted = template.getHierarchyBoundingVectors(true);
+    const center = fitted.min.add(fitted.max).scale(0.5);
+    camera.position.set(center.x, center.y + 0.08, center.z - 0.45);
+    camera.setTarget(center);
+    setStatus("Fish loaded. Enter AR and pull the right trigger on a surface.");
+
+    const marker = BABYLON.MeshBuilder.CreateTorus("hitMarker", {
+        diameter: 0.12, thickness: 0.008, tessellation: 24
+    }, scene);
+    const markerMat = new BABYLON.StandardMaterial("hitMat", scene);
+    markerMat.emissiveColor = new BABYLON.Color3(0.2, 0.9, 1);
+    marker.material = markerMat;
+    marker.rotationQuaternion = new BABYLON.Quaternion();
+    marker.isVisible = false;
+
+    let spawnCount = 0;
+    let latest = null;
+    let rightController = null;
+    let hitTestSource = null;
+    let latestHit = false;
+    let rayLine = null;
+    let rightStick = null;
+    let leftStick = null;
+    const ray = new BABYLON.Ray(BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, 1), 3);
+    const hitPos = new BABYLON.Vector3();
+    const hitRot = new BABYLON.Quaternion();
+
+
+    function poseToScene(xr, pose) {
+        const p = pose.transform.position;
+        const q = pose.transform.orientation;
+        const scale = xr.baseExperience.sessionManager.worldScalingFactor || 1;
+        hitPos.set(p.x * scale, p.y * scale, p.z * scale);
+        hitRot.set(q.x, q.y, q.z, q.w);
+        if (!scene.useRightHandedSystem) {
+            hitPos.z *= -1;
+            hitRot.z *= -1;
+            hitRot.w *= -1;
+        }
+    }
+
+    function updateRay() {
+        if (!rightController || !rightController.getWorldPointerRayToRef) {
+            if (rayLine) rayLine.isVisible = false;
+            return;
+        }
+        rightController.getWorldPointerRayToRef(ray);
+        const origin = ray.origin.clone();
+        const end = latestHit ? hitPos.clone() : origin.add(ray.direction.scale(1.5));
+        const points = [origin, end];
+        if (!rayLine) {
+            rayLine = BABYLON.MeshBuilder.CreateLines("ctrlRay", { points: points, updatable: true }, scene);
+        } else {
+            rayLine = BABYLON.MeshBuilder.CreateLines("ctrlRay", { points: points, instance: rayLine }, scene);
+        }
+        rayLine.color = new BABYLON.Color3(0.3, 0.85, 1);
+        rayLine.isVisible = true;
+        rayLine.alwaysSelectAsActiveMesh = true;
+    }
+
+    // Q2.b — nothing to do until the ray hits a plane
+    function spawnAtHit() {
+        if (!template || !latestHit) return;
+        const fish = template.clone("fish" + (++spawnCount), null);
+        setTreeEnabled(fish, true);
+        fish.position.copyFrom(hitPos);
+        fish.rotationQuaternion = hitRot.clone();
+        latest = {
+            node: fish,
+            position: fish.position.clone(),
+            rotation: fish.rotationQuaternion.clone(),
+            scaling: fish.scaling.clone()
+        };
+        setStatus("Spawned fish " + spawnCount);
+    }
+
+    function horizontalBasis(xr) {
+        const xrCam = xr.baseExperience.camera;
+        const forward = xrCam.getDirection(BABYLON.Axis.Z);
+        const right = xrCam.getDirection(BABYLON.Axis.X);
+        forward.y = 0;
+        right.y = 0;
+        if (forward.lengthSquared() < 1e-6 || right.lengthSquared() < 1e-6) return null;
+        forward.normalize();
+        right.normalize();
+        return { forward: forward, right: right };
+    }
+
+    function scaleLatest(factor) {
+        if (!latest) return;
+        const next = latest.node.scaling.x * factor;
+        const base = latest.scaling.x || 1;
+        const ratio = BABYLON.Scalar.Clamp(next / base, MIN_SCALE, MAX_SCALE);
+        latest.node.scaling.copyFrom(latest.scaling).scaleInPlace(ratio);
+    }
+
+    // Q2.f — older fish stay where they are
+    function resetLatest() {
+        if (!latest) return;
+        latest.node.position.copyFrom(latest.position);
+        latest.node.rotationQuaternion.copyFrom(latest.rotation);
+        latest.node.scaling.copyFrom(latest.scaling);
+        setStatus("Reset latest fish");
+    }
+
+    function requestControllerHitTest(xr) {
+        const session = xr.baseExperience.sessionManager.session;
+        const space = rightController && rightController.inputSource && rightController.inputSource.targetRaySpace;
+        if (!session || !session.requestHitTestSource || !space || hitTestSource) return;
+        session.requestHitTestSource({ space: space }).then(function (source) {
+            hitTestSource = source;
+            setStatus("Right controller ray is hit-testing");
+        }).catch(function (err) {
+            console.warn(err);
+            setStatus("This session did not grant hit-test");
+        });
+    }
+
+
+    // -----------------------------------------
+    // WEBXR - AR MODE
+    // -----------------------------------------
+
+    let xr;
+    try {
+        xr = await scene.createDefaultXRExperienceAsync({
+
+            uiOptions: {
+                sessionMode: "immersive-ar"
+            },
+
+            optionalFeatures: true,
+            disableTeleportation: true
+
+        });
+    } catch (err) {
+        console.warn(err);
+        setStatus((err && err.message) || String(err));
+        return scene;
+    }
+
+    const session = xr.baseExperience.sessionManager;
+    session.onXRSessionInit.add(function () {
+        scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
+        setTreeEnabled(template, false);
+        requestControllerHitTest(xr);
+    });
+    session.onXRSessionEnded.add(function () {
+        scene.clearColor = new BABYLON.Color4(0.12, 0.12, 0.14, 1);
+        scene.activeCamera = camera;
+        if (hitTestSource) {
+            hitTestSource.cancel();
+            hitTestSource = null;
+        }
+        latestHit = false;
+        marker.isVisible = false;
+        if (rayLine) rayLine.isVisible = false;
+        setTreeEnabled(template, true);
+    });
+    session.onXRFrameObservable.add(function (frame) {
+        latestHit = false;
+        if (!hitTestSource || !frame) {
+            marker.isVisible = false;
+        } else {
+            const results = frame.getHitTestResults(hitTestSource);
+            const pose = results.length
+                ? results[0].getPose(session.referenceSpace)
+                : null;
+            if (!pose) {
+                marker.isVisible = false;
+            } else {
+                poseToScene(xr, pose);
+                latestHit = true;
+                marker.position.copyFrom(hitPos);
+                marker.rotationQuaternion.copyFrom(hitRot);
+                marker.isVisible = true;
+            }
+        }
+        updateRay();
+    });
+
+    // Sticks are analog, so they are sampled every frame while held.
+    scene.onBeforeRenderObservable.add(function () {
+        if (!session.session || !latest) return;
+        const dt = engine.getDeltaTime() / 1000;
+
+        const right = stickAxis(rightStick);
+        if (right.x !== 0 || right.y !== 0) {
+            const basis = horizontalBasis(xr);
+            if (basis) {
+                latest.node.position.addInPlace(basis.right.scale(right.x * MOVE_SPEED * dt));
+                latest.node.position.addInPlace(basis.forward.scale(-right.y * MOVE_SPEED * dt));
+            }
+        }
+
+        const left = stickAxis(leftStick);
+        if (left.x !== 0 && latest.node.rotationQuaternion) {
+            const yaw = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, left.x * ROT_SPEED * dt);
+            latest.node.rotationQuaternion = yaw.multiply(latest.node.rotationQuaternion);
+        }
+    });
+
+
+    // -----------------------------------------
+    // CONTROLLER DETECTION
+    // -----------------------------------------
+
+    xr.input.onControllerAddedObservable.add((controller) => {
+
+        console.log(
+            "Controller added:",
+            controller.inputSource.handedness
+        );
+
+        controller.onMotionControllerInitObservable.add((motionController) => {
+
+            const handedness = controller.inputSource.handedness;
+
+            if (handedness === "right") {
+
+                console.log("Right motion controller ready");
+                rightController = controller;
+
+                const trigger = motionController.getComponent("xr-standard-trigger");
+                const aButton = motionController.getComponent("a-button");
+                const bButton = motionController.getComponent("b-button");
+                rightStick = motionController.getComponent("xr-standard-thumbstick");
+
+                if (!trigger || !aButton || !bButton) {
+                    console.log("A right-controller component was not found");
+                    console.log(motionController.getComponentIds());
+                }
+
+                if (trigger) {
+                    trigger.onButtonStateChangedObservable.add(() => {
+                        if (trigger.changes.pressed && trigger.pressed) {
+                            spawnAtHit();
+                        }
+                    });
+                }
+
+                if (aButton) {
+                    aButton.onButtonStateChangedObservable.add(() => {
+                        if (aButton.changes.pressed && aButton.pressed) {
+                            scaleLatest(SCALE_UP);
+                        }
+                    });
+                }
+
+                if (bButton) {
+                    bButton.onButtonStateChangedObservable.add(() => {
+                        if (bButton.changes.pressed && bButton.pressed) {
+                            scaleLatest(SCALE_DOWN);
+                        }
+                    });
+                }
+
+                requestControllerHitTest(xr);
+                return;
+            }
+
+            if (handedness !== "left") return;
+
+            console.log("Left motion controller ready");
+            const xButton = motionController.getComponent("x-button");
+            leftStick = motionController.getComponent("xr-standard-thumbstick");
+
+            if (!xButton) {
+                console.log("X button was not found");
+                console.log(motionController.getComponentIds());
+                return;
+            }
+
+            xButton.onButtonStateChangedObservable.add(() => {
+                if (xButton.changes.pressed && xButton.pressed) {
+                    resetLatest();
+                }
+            });
+
+        });
+
+    });
+
+
+    return scene;
+};

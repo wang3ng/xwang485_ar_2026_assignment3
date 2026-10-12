@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Q3e projection</title>
+    <style>
+        html, body { margin: 0; overflow: hidden; width: 100%; height: 100%; background: #1e1e24; }
+        #renderCanvas { width: 100%; height: 100%; touch-action: none; }
+    </style>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+        globalThis.canvas = canvas;
+        globalThis.engine = engine;
+        import("./scene.js").then(function (mod) {
+            return mod.createScene();
+        }).then(function (scene) {
+            engine.runRenderLoop(function () { scene.render(); });
+        });
+        window.addEventListener("resize", function () { engine.resize(); });
+    </script>
+</body>
+</html>

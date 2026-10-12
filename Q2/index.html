@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Q2 WebXR — fish</title>
+    <style>
+        html, body { margin: 0; overflow: hidden; width: 100%; height: 100%; background: #1e1e24; }
+        #renderCanvas { width: 100%; height: 100%; touch-action: none; background: #1e1e24; }
+        #status {
+            position: absolute; left: 12px; bottom: 12px;
+            color: #fff; font: 14px/1.4 sans-serif;
+            background: rgba(0, 0, 0, 0.45); padding: 8px 10px;
+            pointer-events: none;
+        }
+    </style>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="status">Loading fish.glb…</div>
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const glAttrs = { xrCompatible: true, stencil: true, antialias: true, alpha: true };
+        try {
+            if (!canvas.getContext("webgl2", glAttrs)) {
+                canvas.getContext("webgl2", { stencil: true, antialias: true, alpha: true });
+            }
+        } catch (err) {
+            console.warn(err);
+            canvas.getContext("webgl2", { stencil: true, antialias: true, alpha: true });
+        }
+        const engine = new BABYLON.Engine(canvas, true, { xrCompatible: true, stencil: true, antialias: true });
+        globalThis.canvas = canvas;
+        globalThis.engine = engine;
+        import("./scene.js").then(function (mod) {
+            return mod.createScene();
+        }).then(function (scene) {
+            engine.runRenderLoop(function () { scene.render(); });
+        }).catch(function (err) {
+            console.error(err);
+            document.getElementById("status").textContent = (err && err.message) || String(err);
+        });
+        window.addEventListener("resize", function () { engine.resize(); });
+    </script>
+</body>
+</html>
